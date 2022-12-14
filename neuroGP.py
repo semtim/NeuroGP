@@ -10,30 +10,47 @@ import os
 
 
 class NeuroKernel(nn.Module):
-    def __init__(self, act_fun=nn.ReLU()):
+    def __init__(self, act_fun=nn.ReLU(), init_form=None, device='cpu'):
         super().__init__()
-        self.fc1 = nn.Linear(2, 1024)
-        self.fc2 = nn.Linear(1024, 128)
-        self.fc3 = nn.Linear(128, 1)
-        self.activation = act_fun
+        self.layers = nn.Sequential(
+                                    nn.Linear(2, 128),
+                                    #nn.BatchNorm1d(512),
+                                    nn.Sigmoid(),
+                                    nn.Linear(128, 32),
+                                    #nn.BatchNorm1d(64),
+                                    #nn.Dropout(0.7),
+                                    nn.ReLU(),
+                                    nn.Linear(32, 1),
+                                    #nn.ReLU(),
+                                    #nn.Linear(16, 1),
+                                    )
+
+        self.init_form = init_form
+        self.device = device
+        if self.init_form is not None:
+            self.init()
 
 
     def forward(self, x, x_appr=torch.tensor([])):
         """x - observed time-vector
             K - covariance matrix"""
         if not x_appr.numel():
-            K = torch.eye(x.shape[0])
+            K = torch.eye(x.shape[0]).to(self.device)
+            x_batch = torch.tensor([0, 0]).to(self.device)
             for i, t_i in enumerate(x):
                 for j, t_j in enumerate(x[i:]):
-                    current_x = torch.tensor([[t_i, t_j]]).float()
-                    current_x = self.fc1(current_x)
-                    current_x = self.activation(current_x)
-                    current_x = self.fc2(current_x)
-                    current_x = self.activation(current_x)
-                    current_x = self.fc3(current_x)
-                    K[i, i+j] = current_x
+                    x_batch = torch.vstack((x_batch, torch.tensor([t_i, t_j]).to(self.device)))
+        
+            K_list = self.layers(x_batch[1:].float())
+            
+            last_col_num = 0
+            for i, t_i in enumerate(x):
+                for j, t_j in enumerate(x[i:]):
+                    K[i, i+j] = K_list[j + last_col_num]
+                last_col_num = j + 1
             #K += K.t() - torch.diag(K)
             K = torch.matmul(K.t(), K)
+        #ниже часть для построения ядра для predict, пока не доделал
         else:
             """x[0] - observed time-vector,
             x[1] - approximated time-vector"""
@@ -51,18 +68,37 @@ class NeuroKernel(nn.Module):
 
         return K.double()
 
+    def init(self):
+        gain = torch.nn.init.calculate_gain("sigmoid")
+        for child in self.layers.children():
+            if isinstance(child, nn.Linear):
+                if self.init_form == "normal":
+                    torch.nn.init.xavier_normal_(child.weight, gain=gain)
+                    if child.bias is not None:
+                        torch.nn.init.zeros_(child.bias)
+                elif self.init_form == "uniform":
+                    torch.nn.init.xavier_uniform_(child.weight, gain=gain)
+                    if child.bias is not None:
+                        torch.nn.init.zeros_(child.bias)
+                elif self.init_form == "kaiming_normal_":
+                    torch.nn.init.kaiming_normal_(child.weight, nonlinearity='sigmoid')
+                    if child.bias is not None:
+                        torch.nn.init.zeros_(child.bias)
+
+
 
 
 class LogLikelihood(nn.Module):
-    def __init__(self):
+    def __init__(self, device='cpu'):
         super().__init__()
+        self.device = device
 
     def forward(self, K, y, err):
         """K - covariance matrix,
         y - observed data,
         err - y errors"""
         noise = err**2
-        I = torch.ones(K.shape).double()
+        I = torch.ones(K.shape).double().to(self.device)
         K_y = K + torch.matmul(I, noise)
         n = y.shape[0]
         logp = -0.5 * torch.matmul(torch.matmul(K_y.inverse(), y), y) - \
@@ -77,10 +113,13 @@ class LogLikelihood(nn.Module):
 
 
 class NeuroGP():
-    def __init__(self):
-        self.kernel = NeuroKernel().train()
-        self.loss = LogLikelihood()
-        self.optimizer = torch.optim.SGD(self.kernel.parameters(), lr=0.001)  # Weight update
+    def __init__(self, init_form=None):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.kernel = NeuroKernel(init_form=init_form, device=self.device).train()
+        self.kernel.to(self.device)
+        self.loss = LogLikelihood(device=self.device)
+        self.optimizer = torch.optim.RMSprop(self.kernel.parameters(), alpha=0.9)  # Weight update
+        
 
     def fit(self, x, y, err):
         """x - time-vectors list,
@@ -90,12 +129,12 @@ class NeuroGP():
         y_obs = y.copy()
         err_obs = err.copy()
         for i, sample in enumerate(x_obs):
-            x_obs[i] = torch.tensor(sample).double()
-            y_obs[i] = torch.tensor(y_obs[i]).double()
-            err_obs[i] = torch.tensor(err_obs[i]).double()
+            x_obs[i] = torch.tensor(sample).double().to(self.device)
+            y_obs[i] = torch.tensor(y_obs[i]).double().to(self.device)
+            err_obs[i] = torch.tensor(err_obs[i]).double().to(self.device)
 
         self.ep_loss = []
-        for epoch in range(40):
+        for epoch in range(100):
             ep_loss = 0
             for i, sample in enumerate(x_obs):
                 self.optimizer.zero_grad()
@@ -125,7 +164,7 @@ class NeuroGP():
         return (E, sigma) if return_sigma else E
 
 
-
+#######################################################################
 temp = os.path.abspath("second_cut.csv")
 name = pd.read_csv(temp, sep=",")
 name = pd.DataFrame(name)
@@ -156,5 +195,13 @@ E = gpr.predict(x[0], y[0], err[0], X)
 plt.plot(X, E)
 plt.scatter(x[10], y[10])
 
+#######################################################################
+
+x = np.linspace(0, 100, 150)
+y = 3*x + 5 #np.sin(x)
+err = np.ones(len(x))*0.01
+gpr = NeuroGP(init_form='sigmoid')
+gpr.fit([(x-np.mean(x))/np.std(x)], [y/np.max(y)], [err])
+
 fig, ax = plt.subplots(figsize=(10, 7), dpi=400)
-plt.plot(np.arange(1,41), gpr.ep_loss)
+plt.plot(np.arange(21,101), gpr.ep_loss[20:])
