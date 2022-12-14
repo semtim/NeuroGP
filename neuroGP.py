@@ -13,14 +13,14 @@ class NeuroKernel(nn.Module):
     def __init__(self, act_fun=nn.ReLU(), init_form=None, device='cpu'):
         super().__init__()
         self.layers = nn.Sequential(
-                                    nn.Linear(2, 128),
+                                    nn.Linear(2, 1024),
                                     #nn.BatchNorm1d(512),
                                     nn.Sigmoid(),
-                                    nn.Linear(128, 32),
+                                    nn.Linear(1024, 128),
                                     #nn.BatchNorm1d(64),
                                     #nn.Dropout(0.7),
                                     nn.ReLU(),
-                                    nn.Linear(32, 1),
+                                    nn.Linear(128, 1),
                                     #nn.ReLU(),
                                     #nn.Linear(16, 1),
                                     )
@@ -31,40 +31,26 @@ class NeuroKernel(nn.Module):
             self.init()
 
 
-    def forward(self, x, x_appr=torch.tensor([])):
-        """x - observed time-vector
-            K - covariance matrix"""
-        if not x_appr.numel():
-            K = torch.eye(x.shape[0]).to(self.device)
-            x_batch = torch.tensor([0, 0]).to(self.device)
-            for i, t_i in enumerate(x):
-                for j, t_j in enumerate(x[i:]):
-                    x_batch = torch.vstack((x_batch, torch.tensor([t_i, t_j]).to(self.device)))
-        
-            K_list = self.layers(x_batch[1:].float())
+    def forward(self, x):
+        """x - time-vector,
+           K - covariance matrix"""
+
+        K = torch.eye(x.shape[0]).to(self.device)
+        x_batch = torch.tensor([0, 0]).to(self.device)
+        for i, t_i in enumerate(x):
+            for j, t_j in enumerate(x[i:]):
+                x_batch = torch.vstack((x_batch, torch.tensor([t_i, t_j]).to(self.device)))
+
+        K_list = self.layers(x_batch[1:].float())
             
-            last_col_num = 0
-            for i, t_i in enumerate(x):
-                for j, t_j in enumerate(x[i:]):
-                    K[i, i+j] = K_list[j + last_col_num]
-                last_col_num = j + 1
-            #K += K.t() - torch.diag(K)
-            K = torch.matmul(K.t(), K)
-        #ниже часть для построения ядра для predict, пока не доделал
-        else:
-            """x[0] - observed time-vector,
-            x[1] - approximated time-vector"""
-            x_obs = x
-            K = torch.eye(x_obs.shape[0], x_appr.shape[0])
-            for i, t_i in enumerate(x_obs):
-                for j, t_j in enumerate(x_appr):
-                    current_x = torch.tensor([t_i, t_j, (t_i - t_j)**2]).float()
-                    current_x = self.fc1(current_x)
-                    current_x = self.activation(current_x)
-                    current_x = self.fc2(current_x)
-                    current_x = self.activation(current_x)
-                    current_x = self.fc3(current_x)
-                    K[i, j] = current_x
+        last_col_num = 0
+        for i, t_i in enumerate(x):
+            for j, t_j in enumerate(x[i:]):
+                K[i, i+j] = K_list[j + last_col_num]
+            last_col_num = j + 1
+        #K += K.t() - torch.diag(K)
+        K = torch.matmul(K.t(), K)
+        #K = torch.exp( -(K + K.t() - torch.diag(K)) )
 
         return K.double()
 
@@ -118,7 +104,7 @@ class NeuroGP():
         self.kernel = NeuroKernel(init_form=init_form, device=self.device).train()
         self.kernel.to(self.device)
         self.loss = LogLikelihood(device=self.device)
-        self.optimizer = torch.optim.RMSprop(self.kernel.parameters(), alpha=0.9)  # Weight update
+        self.optimizer = torch.optim.RMSprop(self.kernel.parameters(), alpha=0.1)  # Weight update
         
 
     def fit(self, x, y, err):
@@ -148,16 +134,21 @@ class NeuroGP():
 
 
     @torch.inference_mode()
-    def predict(self, x, y, err, x_appr, return_sigma=False):
+    def predict(self, x, y, err, x_appr=torch.tensor([]), return_sigma=False):
         x_obs = torch.tensor(x)
-        x_appr = torch.tensor(x_appr)
+        if len(x_appr):
+            x_appr = torch.tensor(x_appr)
+        else:
+            x_appr = x_obs
+        X = torch.hstack((x_appr, x_obs))
         y_obs = torch.tensor(y)
-        K_obs = self.kernel(x_obs)
+        K = self.kernel(X).cpu()
+        K_appr, K_obs = K[:len(x_appr), :len(x_appr)], K[-len(x_obs):, -len(x_obs):]
+        K_b = K[len(x_appr):, :len(x_appr)]
+
         noise = torch.tensor(err)**2
         I = torch.ones(K_obs.shape).double()
         K_y = K_obs + torch.matmul(I, noise)
-        K_b = self.kernel(x_obs, x_appr=x_appr)
-        K_appr = self.kernel(x_appr)
         E = torch.matmul(torch.matmul(K_b.t(), K_y.inverse()), y_obs)
         sigma = K_appr - torch.matmul(torch.matmul(K_b.t(), K_y.inverse()), K_b)
 
@@ -197,11 +188,28 @@ plt.scatter(x[10], y[10])
 
 #######################################################################
 
-x = np.linspace(0, 100, 150)
-y = 3*x + 5 #np.sin(x)
+x = np.linspace(0, 6*np.pi, 30)
+y = np.sin(x)
+x_norm = (x - np.mean(x))/np.std(x)
+y_norm = y/np.max(y)
 err = np.ones(len(x))*0.01
-gpr = NeuroGP(init_form='sigmoid')
-gpr.fit([(x-np.mean(x))/np.std(x)], [y/np.max(y)], [err])
+gpr = NeuroGP()
+gpr.fit([x_norm], [y_norm], [err])
 
 fig, ax = plt.subplots(figsize=(10, 7), dpi=400)
-plt.plot(np.arange(21,101), gpr.ep_loss[20:])
+plt.plot(np.arange(1,101), np.log10(np.array(gpr.ep_loss)))
+
+
+X = np.linspace(0, 6*np.pi, 100)
+E = gpr.predict(x_norm, y_norm, err)
+fig, ax = plt.subplots(figsize=(10, 7), dpi=400)
+plt.plot(x, E)
+plt.plot(x, y)
+
+
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF, WhiteKernel
+
+sk_gpr = GaussianProcessRegressor(kernel=RBF(), alpha=err**2).fit(x.reshape(-1,1), y)
+plt.plot(np.linspace(0,150, 30), sk_gpr.predict(np.linspace(0,150, 30).reshape(-1,1)))
+plt.plot(x,y)
