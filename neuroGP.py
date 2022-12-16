@@ -2,10 +2,7 @@ import numpy as np
 import torch.nn as nn
 import torch
 import matplotlib.pyplot as plt
-from scipy import stats
-import pandas as pd
-from snad.load.curves import OSCCurve
-import os
+from collections import defaultdict
 
 
 
@@ -13,16 +10,22 @@ class NeuroKernel(nn.Module):
     def __init__(self, act_fun=nn.ReLU(), init_form=None, device='cpu'):
         super().__init__()
         self.layers = nn.Sequential(
-                                    nn.Linear(2, 1024),
-                                    #nn.BatchNorm1d(512),
-                                    nn.Sigmoid(),
-                                    nn.Linear(1024, 128),
-                                    #nn.BatchNorm1d(64),
-                                    #nn.Dropout(0.7),
-                                    nn.ReLU(),
-                                    nn.Linear(128, 1),
-                                    #nn.ReLU(),
-                                    #nn.Linear(16, 1),
+                        nn.Linear(2, 128),
+                        nn.Tanh(),
+                        #nn.Conv1d(in_channels=1, out_channels=4, kernel_size=5, padding=2),
+                        #nn.MaxPool1d(2),
+                        #nn.ReLU(),
+                        #nn.Conv1d(4, 16, 3, padding=1),
+                        #nn.MaxPool1d(2), #1024/4
+                        #nn.ReLU(),
+                        #nn.Flatten(),
+                        nn.Linear(128, 32),
+                        nn.LeakyReLU(),
+                        nn.Linear(32, 64),
+                        nn.LeakyReLU(),
+                        nn.Linear(64, 16),
+                        nn.LeakyReLU(),
+                        nn.Linear(16, 1)
                                     )
 
         self.init_form = init_form
@@ -41,6 +44,11 @@ class NeuroKernel(nn.Module):
             for j, t_j in enumerate(x[i:]):
                 x_batch = torch.vstack((x_batch, torch.tensor([t_i, t_j]).to(self.device)))
 
+        #K_list = self.layers[0](x_batch[1:].float())
+        #K_list = self.layers[1](K_list)
+        #K_list = K_list.view(-1, 1, 1024)
+        #for layer in self.layers[2:]:
+        #    K_list = layer(K_list)
         K_list = self.layers(x_batch[1:].float())
             
         last_col_num = 0
@@ -48,28 +56,34 @@ class NeuroKernel(nn.Module):
             for j, t_j in enumerate(x[i:]):
                 K[i, i+j] = K_list[j + last_col_num]
             last_col_num = j + 1
-        #K += K.t() - torch.diag(K)
         K = torch.matmul(K.t(), K)
-        #K = torch.exp( -(K + K.t() - torch.diag(K)) )
 
         return K.double()
 
     def init(self):
-        gain = torch.nn.init.calculate_gain("sigmoid")
-        for child in self.layers.children():
-            if isinstance(child, nn.Linear):
-                if self.init_form == "normal":
-                    torch.nn.init.xavier_normal_(child.weight, gain=gain)
-                    if child.bias is not None:
-                        torch.nn.init.zeros_(child.bias)
-                elif self.init_form == "uniform":
-                    torch.nn.init.xavier_uniform_(child.weight, gain=gain)
-                    if child.bias is not None:
-                        torch.nn.init.zeros_(child.bias)
-                elif self.init_form == "kaiming_normal_":
-                    torch.nn.init.kaiming_normal_(child.weight, nonlinearity='sigmoid')
-                    if child.bias is not None:
-                        torch.nn.init.zeros_(child.bias)
+        tanh_gain = torch.nn.init.calculate_gain("tanh")
+        leaky_gain = torch.nn.init.calculate_gain("leaky_relu")
+        sigmoid_gain = torch.nn.init.calculate_gain("sigmoid")
+        torch.nn.init.xavier_normal_(self.layers[0].weight, gain=tanh_gain)
+        torch.nn.init.xavier_normal_(self.layers[2].weight, gain=leaky_gain)
+        torch.nn.init.xavier_normal_(self.layers[4].weight, gain=leaky_gain)
+        torch.nn.init.xavier_normal_(self.layers[6].weight, gain=leaky_gain)
+        torch.nn.init.xavier_normal_(self.layers[8].weight, gain=leaky_gain)
+        # gain = torch.nn.init.calculate_gain("tanh")
+        # for child in self.layers.children():
+        #     if isinstance(child, nn.Linear) or isinstance(child, nn.Conv1d):
+        #         if self.init_form == "normal":
+        #             torch.nn.init.xavier_normal_(child.weight, gain=gain)
+        #             if child.bias is not None:
+        #                 torch.nn.init.zeros_(child.bias)
+        #         elif self.init_form == "uniform":
+        #             torch.nn.init.xavier_uniform_(child.weight, gain=gain)
+        #             if child.bias is not None:
+        #                 torch.nn.init.zeros_(child.bias)
+        #         elif self.init_form == "kaiming_normal_":
+        #             torch.nn.init.kaiming_normal_(child.weight, nonlinearity='tanh')
+        #             if child.bias is not None:
+        #                 torch.nn.init.zeros_(child.bias)
 
 
 
@@ -104,8 +118,7 @@ class NeuroGP():
         self.kernel = NeuroKernel(init_form=init_form, device=self.device).train()
         self.kernel.to(self.device)
         self.loss = LogLikelihood(device=self.device)
-        self.optimizer = torch.optim.RMSprop(self.kernel.parameters(), alpha=0.1)  # Weight update
-        
+        self.optimizer = torch.optim.Adam(self.kernel.parameters(), lr=0.01)  # Weight update
 
     def fit(self, x, y, err):
         """x - time-vectors list,
@@ -155,61 +168,54 @@ class NeuroGP():
         return (E, sigma) if return_sigma else E
 
 
-#######################################################################
-temp = os.path.abspath("second_cut.csv")
-name = pd.read_csv(temp, sep=",")
-name = pd.DataFrame(name)
-
-sn = []
-for i in range(len(name)):
-    try:
-        sn.append(OSCCurve.from_json(os.path.join('./sne', name['Name'][i] + '.json'), bands='r'))
-        sn[-1] = sn[-1].filtered(with_upper_limits=False, with_inf_e_flux=False, sort='filtered')
-        sn[-1] = sn[-1].binned(bin_width=1, discrete_time=True)
-    except:
-        continue
-
-x, y = [], []
-err = []
-for i in range(len(sn)):
-    if len(sn[i].X[:,1]) >= 20:
-        y.append(sn[i].y)
-        x.append(sn[i].X[:,1])  # - sn[i].X[:,1][np.argmax(y[-1])]
-        err.append(sn[i].err)
-
-gpr = NeuroGP()
-gpr.fit(x, y, err)
 
 
-X = np.linspace(min(x[0]), max(x[0]), 380)
-E = gpr.predict(x[0], y[0], err[0], X)
-plt.plot(X, E)
-plt.scatter(x[10], y[10])
+def get_forward_hook(history_dict, key):
+    def forward_hook(self, input_, output):
+        history_dict[key] = input_[0].cpu().detach().numpy().flatten()
 
-#######################################################################
-
-x = np.linspace(0, 6*np.pi, 30)
-y = np.sin(x)
-x_norm = (x - np.mean(x))/np.std(x)
-y_norm = y/np.max(y)
-err = np.ones(len(x))*0.01
-gpr = NeuroGP()
-gpr.fit([x_norm], [y_norm], [err])
-
-fig, ax = plt.subplots(figsize=(10, 7), dpi=400)
-plt.plot(np.arange(1,101), np.log10(np.array(gpr.ep_loss)))
+    return forward_hook
 
 
-X = np.linspace(0, 6*np.pi, 100)
-E = gpr.predict(x_norm, y_norm, err)
-fig, ax = plt.subplots(figsize=(10, 7), dpi=400)
-plt.plot(x, E)
-plt.plot(x, y)
+def get_backward_hook(history_dict, key):
+    def backward_hook(grad):  # for tensors
+        history_dict[key] = grad.abs().cpu().detach().numpy().flatten()
+
+    return backward_hook
 
 
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, WhiteKernel
+def register_model_hooks(model):
+    cur_ind = 0
+    hooks_data_history = defaultdict(list)
+    for child in model.layers.children():
+        if isinstance(child, nn.Linear):
+            cur_ind += 1
+            forward_hook = get_forward_hook(hooks_data_history, f"activation_{cur_ind}")
+            child.register_forward_hook(forward_hook)
 
-sk_gpr = GaussianProcessRegressor(kernel=RBF(), alpha=err**2).fit(x.reshape(-1,1), y)
-plt.plot(np.linspace(0,150, 30), sk_gpr.predict(np.linspace(0,150, 30).reshape(-1,1)))
-plt.plot(x,y)
+            backward_hook = get_backward_hook(hooks_data_history, f"gradient_{cur_ind}")
+            child.weight.register_hook(backward_hook)
+    return hooks_data_history
+
+
+def plot_hooks_data(hooks_data_history):
+    keys = hooks_data_history.keys()
+    n_layers = len(keys) // 2
+
+    activation_names = [f"activation_{i + 1}" for i in range(1, n_layers)]
+    activations_on_layers = [
+        hooks_data_history[activation] for activation in activation_names
+    ]
+
+    gradient_names = [f"gradient_{i + 1}" for i in range(n_layers)]
+    gradients_on_layers = [hooks_data_history[gradient] for gradient in gradient_names]
+
+    for plot_name, values, labels in zip(
+        ["activations", "gradients"],
+        [activations_on_layers, gradients_on_layers],
+        [activation_names, gradient_names],
+    ):
+        fig, ax = plt.subplots(1, len(labels), figsize=(14, 4), sharey="row") 
+        for label_idx, label in enumerate(labels):
+            ax[label_idx].boxplot(values[label_idx], labels=[label])
+        plt.show()
