@@ -6,30 +6,30 @@ from collections import defaultdict
 
 
 
+class Sigma(nn.Module):
+    def __init__(self):
+        super(Sigma, self).__init__()
+        self.sigma = torch.nn.Parameter(torch.ones(1))
+        self.sigma.requires_grad = True
+
+    def forward(self, x):
+        return self.sigma**2 * x
+
+
 class NeuroKernel(nn.Module):
-    def __init__(self, act_fun=nn.ReLU(), init_form=None, device='cpu'):
+    def __init__(self, act_fun=nn.ReLU(), init_form=None, device='cpu', sigma=1):
         super().__init__()
         self.layers = nn.Sequential(
-                        nn.Linear(2, 128),
+                        nn.Linear(2, 256),
                         nn.Tanh(),
-                        #nn.Conv1d(in_channels=1, out_channels=4, kernel_size=5, padding=2),
-                        #nn.MaxPool1d(2),
-                        #nn.ReLU(),
-                        #nn.Conv1d(4, 16, 3, padding=1),
-                        #nn.MaxPool1d(2), #1024/4
-                        #nn.ReLU(),
-                        #nn.Flatten(),
-                        nn.Linear(128, 32),
-                        nn.LeakyReLU(),
-                        nn.Linear(32, 64),
-                        nn.LeakyReLU(),
-                        nn.Linear(64, 16),
-                        nn.LeakyReLU(),
-                        nn.Linear(16, 1)
+                        nn.Linear(256, 32),
+                        nn.ReLU(),
+                        nn.Linear(32, 1),
                                     )
 
         self.init_form = init_form
         self.device = device
+        self.sigma_param = Sigma()
         if self.init_form is not None:
             self.init()
 
@@ -44,19 +44,15 @@ class NeuroKernel(nn.Module):
             for j, t_j in enumerate(x[i:]):
                 x_batch = torch.vstack((x_batch, torch.tensor([t_i, t_j]).to(self.device)))
 
-        #K_list = self.layers[0](x_batch[1:].float())
-        #K_list = self.layers[1](K_list)
-        #K_list = K_list.view(-1, 1, 1024)
-        #for layer in self.layers[2:]:
-        #    K_list = layer(K_list)
         K_list = self.layers(x_batch[1:].float())
-            
+
         last_col_num = 0
         for i, t_i in enumerate(x):
             for j, t_j in enumerate(x[i:]):
-                K[i, i+j] = K_list[j + last_col_num]
+                if i!=(i + j):
+                    K[i, i+j] = K_list[j + last_col_num]
             last_col_num = j + 1
-        K = torch.matmul(K.t(), K)
+        K =  self.sigma_param(torch.matmul(K.t(), K))
 
         return K.double()
 
@@ -65,25 +61,8 @@ class NeuroKernel(nn.Module):
         leaky_gain = torch.nn.init.calculate_gain("leaky_relu")
         sigmoid_gain = torch.nn.init.calculate_gain("sigmoid")
         torch.nn.init.xavier_normal_(self.layers[0].weight, gain=tanh_gain)
-        torch.nn.init.xavier_normal_(self.layers[2].weight, gain=leaky_gain)
-        torch.nn.init.xavier_normal_(self.layers[4].weight, gain=leaky_gain)
-        torch.nn.init.xavier_normal_(self.layers[6].weight, gain=leaky_gain)
-        torch.nn.init.xavier_normal_(self.layers[8].weight, gain=leaky_gain)
-        # gain = torch.nn.init.calculate_gain("tanh")
-        # for child in self.layers.children():
-        #     if isinstance(child, nn.Linear) or isinstance(child, nn.Conv1d):
-        #         if self.init_form == "normal":
-        #             torch.nn.init.xavier_normal_(child.weight, gain=gain)
-        #             if child.bias is not None:
-        #                 torch.nn.init.zeros_(child.bias)
-        #         elif self.init_form == "uniform":
-        #             torch.nn.init.xavier_uniform_(child.weight, gain=gain)
-        #             if child.bias is not None:
-        #                 torch.nn.init.zeros_(child.bias)
-        #         elif self.init_form == "kaiming_normal_":
-        #             torch.nn.init.kaiming_normal_(child.weight, nonlinearity='tanh')
-        #             if child.bias is not None:
-        #                 torch.nn.init.zeros_(child.bias)
+        torch.nn.init.xavier_normal_(self.layers[2].weight, gain=tanh_gain)
+        torch.nn.init.xavier_normal_(self.layers[4].weight, gain=tanh_gain)
 
 
 
