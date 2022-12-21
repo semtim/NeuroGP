@@ -20,9 +20,9 @@ class NeuroKernel(nn.Module):
     def __init__(self, act_fun=nn.ReLU(), init_form=None, device='cpu', sigma=1):
         super().__init__()
         self.layers = nn.Sequential(
-                        nn.Linear(2, 256),
+                        nn.Linear(2, 128),
                         nn.Tanh(),
-                        nn.Linear(256, 32),
+                        nn.Linear(128, 32),
                         nn.ReLU(),
                         nn.Linear(32, 1),
                                     )
