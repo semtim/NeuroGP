@@ -1,35 +1,51 @@
 from scipy import stats
 import pandas as pd
-from snad.load.curves import OSCCurve
+#from snad.load.curves import OSCCurve
 import os
 import neuroGP
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 
 #######################################################################
+n = 20
+def data_gen(n=20):
+    x_train = np.random.rand(n) * 150 - 50
+    x_train.sort()
+    y = 0.5*x_train
+    #X = np.vstack((X, X[:, ::-1]))
+    #X, Y = torch.tensor(X).float(), torch.tensor(Y).float().view(-1, 1)
+    return x_train, y
 
-x = np.linspace(0, 10, 10)
-y = 0.5*x #np.sin(x)
-x_norm = (x - np.mean(x))/np.std(x)
-y_norm = y/np.max(y)
-err = np.ones(len(x))*1e-6
+n_sample = 1000
+x, y, err = [], [], []
+for i in range(n_sample):
+    x1, y1 = data_gen(n)
+    #x_norm = (x - np.mean(x))/np.std(x)
+    #y_norm = y/np.max(y)
+    err1 = np.ones(len(x1))*1e-6
+    x.append(x1)
+    y.append(y1)
+    err.append(err1)
+
+
 gpr = neuroGP.NeuroGP(init_form='normal')
 
-hooks_data_history = neuroGP.register_model_hooks(gpr.kernel)
+#hooks_data_history = neuroGP.register_model_hooks(gpr.kernel)
 
-gpr.fit([x], [y], [err])
+gpr.fit(x, y, err)
 
-neuroGP.plot_hooks_data(hooks_data_history)
+#neuroGP.plot_hooks_data(hooks_data_history)
 
 fig, ax = plt.subplots(figsize=(10, 7), dpi=400)
-plt.plot(np.arange(1,101), np.log10(np.array(gpr.ep_loss)))
+plt.plot(np.arange(1,11), np.array(gpr.ep_loss))
 
 
-X = np.linspace(0, 10, 100)
+X = np.linspace(-50, 100, 30)
 fig, ax = plt.subplots(figsize=(10, 7), dpi=400)
-E = gpr.predict(x, y, err, X)
+E = gpr.predict(x[0], y[0], err[0], X)
 plt.plot(X, E)
-plt.plot(x, y)
+plt.plot(x[0], y[0])
 
 
 from sklearn.gaussian_process import GaussianProcessRegressor

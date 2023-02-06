@@ -78,6 +78,7 @@ class LogLikelihood(nn.Module):
         err - y errors"""
         noise = err**2
         I = torch.ones(K.shape).double().to(self.device)
+        #print( K.shape ,y.shape, err.shape)
         K_y = K + torch.matmul(I, noise)
         n = y.shape[0]
         logp = -0.5 * torch.matmul(torch.matmul(K_y.inverse(), y), y) - \
@@ -92,12 +93,13 @@ class LogLikelihood(nn.Module):
 
 
 class NeuroGP():
-    def __init__(self, init_form=None):
+    def __init__(self, n_epoch=10, init_form=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.kernel = NeuroKernel(init_form=init_form, device=self.device).train()
         self.kernel.to(self.device)
         self.loss = LogLikelihood(device=self.device)
         self.optimizer = torch.optim.Adam(self.kernel.parameters(), lr=0.01)  # Weight update
+        self.n_epoch = n_epoch
 
     def fit(self, x, y, err):
         """x - time-vectors list,
@@ -112,8 +114,9 @@ class NeuroGP():
             err_obs[i] = torch.tensor(err_obs[i]).double().to(self.device)
 
         self.ep_loss = []
-        for epoch in range(100):
+        for epoch in range(self.n_epoch):
             ep_loss = 0
+            self.kernel.train()
             for i, sample in enumerate(x_obs):
                 self.optimizer.zero_grad()
                 K = self.kernel(sample)
