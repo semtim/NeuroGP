@@ -20,11 +20,11 @@ class NeuroKernel(nn.Module):
     def __init__(self, act_fun=nn.ReLU(), init_form=None, device='cpu', sigma=1):
         super().__init__()
         self.layers = nn.Sequential(
-                        nn.Linear(2, 128),
+                        nn.Linear(2, 64),
                         nn.Tanh(),
-                        nn.Linear(128, 32),
+                        nn.Linear(64, 16),
                         nn.ReLU(),
-                        nn.Linear(32, 1),
+                        nn.Linear(16, 1),
                                     )
 
         self.init_form = init_form
@@ -49,10 +49,15 @@ class NeuroKernel(nn.Module):
         last_col_num = 0
         for i, t_i in enumerate(x):
             for j, t_j in enumerate(x[i:]):
-                if i!=(i + j):
-                    K[i, i+j] = K_list[j + last_col_num]
-            last_col_num = j + 1
-        K =  self.sigma_param(torch.matmul(K.t(), K))
+                K[i, i+j] = K_list[j + last_col_num]
+            last_col_num += j + 1
+        
+        K = torch.matmul(K.t(), K)
+        # for i, _ in enumerate(K):
+        #     for j, _ in enumerate(K):
+        #         if i==j:
+        #             K[i, j] = 1
+        # K =  self.sigma_param(K)
 
         return K.double()
 
@@ -78,7 +83,6 @@ class LogLikelihood(nn.Module):
         err - y errors"""
         noise = err**2
         I = torch.ones(K.shape).double().to(self.device)
-        #print( K.shape ,y.shape, err.shape)
         K_y = K + torch.matmul(I, noise)
         n = y.shape[0]
         logp = -0.5 * torch.matmul(torch.matmul(K_y.inverse(), y), y) - \
@@ -88,12 +92,12 @@ class LogLikelihood(nn.Module):
         # AIC = 2*n - 2*(-0.5 * torch.matmul(torch.matmul(K_y.inverse(), y), y) - \
         #             0.5 * K_y.logdet() - n / 2 * np.log(2 * np.pi))
 
-        return -mod_logp
+        return -logp
 
 
 
 class NeuroGP():
-    def __init__(self, n_epoch=10, init_form=None):
+    def __init__(self, n_epoch=100, init_form=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.kernel = NeuroKernel(init_form=init_form, device=self.device).train()
         self.kernel.to(self.device)
@@ -149,7 +153,9 @@ class NeuroGP():
 
         return (E, sigma) if return_sigma else E
 
-
+    @torch.inference_mode()
+    def get_cov_matrix(self, x):
+        return self.kernel(x)
 
 
 def get_forward_hook(history_dict, key):

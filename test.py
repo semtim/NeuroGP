@@ -8,44 +8,38 @@ import matplotlib.pyplot as plt
 import torch
 
 #######################################################################
-n = 20
 def data_gen(n=20):
     x_train = np.random.rand(n) * 150 - 50
     x_train.sort()
-    y = 0.5*x_train
+    y = 0.5*x_train #stats.norm.rvs(0, 5, size=n) #0.5*x_train 
     #X = np.vstack((X, X[:, ::-1]))
     #X, Y = torch.tensor(X).float(), torch.tensor(Y).float().view(-1, 1)
     return x_train, y
 
-n_sample = 1000
-x, y, err = [], [], []
-for i in range(n_sample):
-    x1, y1 = data_gen(n)
-    #x_norm = (x - np.mean(x))/np.std(x)
-    #y_norm = y/np.max(y)
-    err1 = np.ones(len(x1))*1e-6
-    x.append(x1)
-    y.append(y1)
-    err.append(err1)
+n = 50
+x, y = data_gen(n)
+#x = (x - np.mean(x))#/np.std(x)
+#y_norm = y/np.max(y)
+err = np.ones(len(x))*1e-6
 
 
 gpr = neuroGP.NeuroGP(init_form='normal')
 
 #hooks_data_history = neuroGP.register_model_hooks(gpr.kernel)
 
-gpr.fit(x, y, err)
+gpr.fit([x], [y], [err])
 
 #neuroGP.plot_hooks_data(hooks_data_history)
 
 fig, ax = plt.subplots(figsize=(10, 7), dpi=400)
-plt.plot(np.arange(1,11), np.array(gpr.ep_loss))
+plt.plot(np.arange(1,101), np.array(gpr.ep_loss))
 
 
-X = np.linspace(-50, 100, 30)
+X = np.linspace(np.min(x)-1, np.max(x)+1, 30)
 fig, ax = plt.subplots(figsize=(10, 7), dpi=400)
-E = gpr.predict(x[0], y[0], err[0], X)
+E = gpr.predict(x, y, err, X)
 plt.plot(X, E)
-plt.plot(x[0], y[0])
+plt.scatter(x, y)
 
 
 from sklearn.gaussian_process import GaussianProcessRegressor
