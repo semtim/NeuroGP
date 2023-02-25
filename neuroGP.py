@@ -3,6 +3,35 @@ import torch.nn as nn
 import torch
 import matplotlib.pyplot as plt
 from collections import defaultdict
+import copy
+
+class RBF(nn.Module):
+    def __init__(self):
+        super(RBF, self).__init__()
+        self.const = torch.nn.Parameter(torch.ones(1))
+        self.const.requires_grad = True
+        self.length_scale = torch.nn.Parameter(torch.ones(1))
+        self.length_scale.requires_grad = True
+
+    def forward(self, x):
+        """x - time-vector,
+           K - covariance matrix"""
+
+        K = torch.eye(x.shape[0])
+        K_list = []
+        for i, t_i in enumerate(x):
+            for j, t_j in enumerate(x[i:]):
+                K_list.append(torch.exp(-(t_i - t_j)**2/self.length_scale**2/2))
+
+        last_col_num = 0
+        for i, t_i in enumerate(x):
+            for j, t_j in enumerate(x[i:]):
+                K[i, i+j] = K_list[j + last_col_num]
+            last_col_num += j + 1
+        self.K = K
+        K += K.t() - torch.diag(K)*torch.eye(len(K))
+        #K = torch.matmul(K.t(), K)
+        return K.double()
 
 
 
@@ -20,11 +49,11 @@ class NeuroKernel(nn.Module):
     def __init__(self, act_fun=nn.ReLU(), init_form=None, device='cpu', sigma=1):
         super().__init__()
         self.layers = nn.Sequential(
-                        nn.Linear(2, 64),
+                        nn.Linear(2, 32),
                         nn.Tanh(),
-                        nn.Linear(64, 16),
+                        nn.Linear(32, 32),
                         nn.ReLU(),
-                        nn.Linear(16, 1),
+                        nn.Linear(32, 1),
                                     )
 
         self.init_form = init_form
@@ -52,6 +81,7 @@ class NeuroKernel(nn.Module):
                 K[i, i+j] = K_list[j + last_col_num]
             last_col_num += j + 1
         
+        self.K_decomposed = K
         K = torch.matmul(K.t(), K)
         # for i, _ in enumerate(K):
         #     for j, _ in enumerate(K):
@@ -82,8 +112,8 @@ class LogLikelihood(nn.Module):
         y - observed data,
         err - y errors"""
         noise = err**2
-        I = torch.ones(K.shape).double().to(self.device)
-        K_y = K + torch.matmul(I, noise)
+        I = torch.eye(K.shape[0]).double().to(self.device)
+        K_y = K + I*noise
         n = y.shape[0]
         logp = -0.5 * torch.matmul(torch.matmul(K_y.inverse(), y), y) - \
                     0.5 * K_y.logdet() - n / 2 * np.log(2 * np.pi)
@@ -97,9 +127,9 @@ class LogLikelihood(nn.Module):
 
 
 class NeuroGP():
-    def __init__(self, n_epoch=100, init_form=None):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.kernel = NeuroKernel(init_form=init_form, device=self.device).train()
+    def __init__(self, n_epoch=100, init_form=None, device='cpu'):
+        self.device = device #torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.kernel = RBF().train() #NeuroKernel(init_form=init_form, device=self.device).train()
         self.kernel.to(self.device)
         self.loss = LogLikelihood(device=self.device)
         self.optimizer = torch.optim.Adam(self.kernel.parameters(), lr=0.01)  # Weight update
@@ -146,8 +176,8 @@ class NeuroGP():
         K_b = K[len(x_appr):, :len(x_appr)]
 
         noise = torch.tensor(err)**2
-        I = torch.ones(K_obs.shape).double()
-        K_y = K_obs + torch.matmul(I, noise)
+        I = torch.eye(K_obs.shape[0]).double()
+        K_y = K_obs + I*noise
         E = torch.matmul(torch.matmul(K_b.t(), K_y.inverse()), y_obs)
         sigma = K_appr - torch.matmul(torch.matmul(K_b.t(), K_y.inverse()), K_b)
 
