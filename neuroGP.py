@@ -19,6 +19,16 @@ class RBF(nn.Module):
 
         K = torch.eye(x.shape[0])
         K_list = []
+        # x_batch = torch.tensor([0, 0])
+        # for i, t_i in enumerate(x):
+        #     for j, t_j in enumerate(x[i:]):
+        #         x_batch = torch.vstack((x_batch, torch.tensor([t_i, t_j])))
+        # x_batch = x_batch[1:]
+        
+        # for pair in x_batch:
+        #     K_list.append(torch.exp(-(pair[0] - pair[1])**2/self.length_scale**2/2))
+            
+            
         for i, t_i in enumerate(x):
             for j, t_j in enumerate(x[i:]):
                 K_list.append(torch.exp(-(t_i - t_j)**2/self.length_scale**2/2))
@@ -49,11 +59,11 @@ class NeuroKernel(nn.Module):
     def __init__(self, act_fun=nn.ReLU(), init_form=None, device='cpu', sigma=1):
         super().__init__()
         self.layers = nn.Sequential(
-                        nn.Linear(2, 32),
+                        nn.Linear(2, 50),
                         nn.Tanh(),
-                        nn.Linear(32, 32),
+                        nn.Linear(50, 15),
                         nn.ReLU(),
-                        nn.Linear(32, 1),
+                        nn.Linear(15, 1),
                                     )
 
         self.init_form = init_form
@@ -122,17 +132,17 @@ class LogLikelihood(nn.Module):
         # AIC = 2*n - 2*(-0.5 * torch.matmul(torch.matmul(K_y.inverse(), y), y) - \
         #             0.5 * K_y.logdet() - n / 2 * np.log(2 * np.pi))
 
-        return -logp
+        return -mod_logp
 
 
 
 class NeuroGP():
     def __init__(self, n_epoch=100, init_form=None, device='cpu'):
         self.device = device #torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.kernel = RBF().train() #NeuroKernel(init_form=init_form, device=self.device).train()
+        self.kernel = RBF().train() #NeuroKernel(init_form=init_form, device=self.device).train() #
         self.kernel.to(self.device)
         self.loss = LogLikelihood(device=self.device)
-        self.optimizer = torch.optim.Adam(self.kernel.parameters(), lr=0.01)  # Weight update
+        self.optimizer = torch.optim.Adam(self.kernel.parameters(), lr=2)  # lr=0.01 if rbf
         self.n_epoch = n_epoch
 
     def fit(self, x, y, err):

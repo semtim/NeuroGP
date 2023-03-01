@@ -10,11 +10,11 @@ class rbfNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.layers = nn.Sequential(
-                        nn.Linear(2, 128),
-                        nn.ReLU(),
-                        nn.Linear(128, 32),
+                        nn.Linear(2, 50),
                         nn.Tanh(),
-                        nn.Linear(32, 1),
+                        nn.Linear(50, 15),
+                        nn.ReLU(),
+                        nn.Linear(15, 1),
                                     )
         # self.init()
 

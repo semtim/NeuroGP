@@ -6,12 +6,12 @@ import neuroGP
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-
+import torch
 #######################################################################
 def data_gen(n=20):
     x_train = np.random.rand(n) * 150 - 50
     x_train.sort()
-    y = x_train**2 #stats.norm.rvs(0, 5, size=n) #0.5*x_train 
+    y = x_train*2  #stats.norm.rvs(0, 5, size=n) #0.5*x_train 
     #X = np.vstack((X, X[:, ::-1]))
     #X, Y = torch.tensor(X).float(), torch.tensor(Y).float().view(-1, 1)
     return x_train, y
@@ -22,8 +22,9 @@ x, y = data_gen(n)
 #y_norm = y/np.max(y)
 err = np.ones(len(x))*1e-3
 
-n_epoch = 5000
-gpr = neuroGP.NeuroGP(n_epoch=n_epoch)
+n_epoch = 50 #50 for rbf with lr=2
+dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+gpr = neuroGP.NeuroGP(n_epoch=n_epoch, device='cpu', init_form='normal')
 
 #hooks_data_history = neuroGP.register_model_hooks(gpr.kernel)
 
