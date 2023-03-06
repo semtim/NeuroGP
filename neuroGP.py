@@ -19,15 +19,6 @@ class RBF(nn.Module):
 
         K = torch.eye(x.shape[0])
         K_list = []
-        # x_batch = torch.tensor([0, 0])
-        # for i, t_i in enumerate(x):
-        #     for j, t_j in enumerate(x[i:]):
-        #         x_batch = torch.vstack((x_batch, torch.tensor([t_i, t_j])))
-        # x_batch = x_batch[1:]
-        
-        # for pair in x_batch:
-        #     K_list.append(torch.exp(-(pair[0] - pair[1])**2/self.length_scale**2/2))
-            
             
         for i, t_i in enumerate(x):
             for j, t_j in enumerate(x[i:]):
@@ -56,10 +47,10 @@ class Sigma(nn.Module):
 
 
 class NeuroKernel(nn.Module):
-    def __init__(self, act_fun=nn.ReLU(), init_form=None, device='cpu', sigma=1):
+    def __init__(self, act_fun=nn.ReLU(), init_form=None, device='cpu'):
         super().__init__()
         self.layers = nn.Sequential(
-                        nn.Linear(2, 50),
+                        nn.Linear(3, 50),
                         nn.Tanh(),
                         nn.Linear(50, 15),
                         nn.ReLU(),
@@ -78,19 +69,20 @@ class NeuroKernel(nn.Module):
            K - covariance matrix"""
 
         K = torch.eye(x.shape[0]).to(self.device)
-        x_batch = torch.tensor([0, 0]).to(self.device)
+        x_batch = torch.tensor([0, 0, 0]).to(self.device)
         for i, t_i in enumerate(x):
             for j, t_j in enumerate(x[i:]):
-                x_batch = torch.vstack((x_batch, torch.tensor([t_i, t_j]).to(self.device)))
+                x_batch = torch.vstack((x_batch, torch.tensor([t_i, t_j, (t_i - t_j)**2]).to(self.device)))
 
         K_list = self.layers(x_batch[1:].float())
-
+        self.k_list = K_list
+        
         last_col_num = 0
         for i, t_i in enumerate(x):
             for j, t_j in enumerate(x[i:]):
                 K[i, i+j] = K_list[j + last_col_num]
             last_col_num += j + 1
-        
+            
         self.K_decomposed = K
         K = torch.matmul(K.t(), K)
         # for i, _ in enumerate(K):
@@ -128,21 +120,21 @@ class LogLikelihood(nn.Module):
         logp = -0.5 * torch.matmul(torch.matmul(K_y.inverse(), y), y) - \
                     0.5 * K_y.logdet() - n / 2 * np.log(2 * np.pi)
         mod_logp = logp / n
-        
+        #добавить слагаемое в лосс фукцию по 
         # AIC = 2*n - 2*(-0.5 * torch.matmul(torch.matmul(K_y.inverse(), y), y) - \
         #             0.5 * K_y.logdet() - n / 2 * np.log(2 * np.pi))
 
-        return -mod_logp
+        return -mod_logp +  torch.sum(torch.pow(K_y, 2))*0.01
 
 
 
 class NeuroGP():
     def __init__(self, n_epoch=100, init_form=None, device='cpu'):
         self.device = device #torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.kernel = RBF().train() #NeuroKernel(init_form=init_form, device=self.device).train() #
+        self.kernel = NeuroKernel(init_form=init_form, device=self.device).train() #RBF().train()
         self.kernel.to(self.device)
         self.loss = LogLikelihood(device=self.device)
-        self.optimizer = torch.optim.Adam(self.kernel.parameters(), lr=2)  # lr=0.01 if rbf
+        self.optimizer = torch.optim.Adam(self.kernel.parameters(), lr=1e-4) #torch.optim.SGD(self.kernel.parameters(), lr=1e-4, momentum=0.01, nesterov=True, weight_decay=1e-3)
         self.n_epoch = n_epoch
 
     def fit(self, x, y, err):
